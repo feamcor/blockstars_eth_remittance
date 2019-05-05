@@ -1,0 +1,27 @@
+{
+  "name": "blockstars_eth_remittance",
+  "version": "0.1.0",
+  "description": "Blockstars Ethereum Module 7 Remittance",
+  "main": "truffle-config.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/feamcor/blockstars_eth_remittance.git"
+  },
+  "author": "Fábio Corrêa <feamcor@gmail.com>",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/feamcor/blockstars_eth_remittance/issues"
+  },
+  "homepage": "https://github.com/feamcor/blockstars_eth_remittance#readme",
+  "dependencies": {
+    "dotenv": "^8.0.0",
+    "ganache-cli": "^6.4.3",
+    "openzeppelin-solidity": "^2.2.0",
+    "truffle": "^5.0.15",
+    "truffle-assertions": "^0.8.2",
+    "truffle-hdwallet-provider": "^1.0.8"
+  }
+}
