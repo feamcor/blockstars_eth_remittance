@@ -1,133 +1,170 @@
 pragma solidity 0.5.8;
 
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "openzeppelin-solidity/contracts/drafts/Counters.sol";
 import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
 import "openzeppelin-solidity/contracts/lifecycle/Pausable.sol";
 
+/// @title Transfer funds from A (on-chain) to C (off-chain) using B (on-chain) as exchange to fiat currency
+/// @notice B9lab Blockstars Certified Ethereum Developer Course
+/// @notice Module 7 project: Remittance
+/// @author Fábio Corrêa <feamcor@gmail.com>
 contract Remittance is Ownable, Pausable {
     using SafeMath for uint;
-    using Counters for Counters.Counter;
 
-    enum RemittanceStatus { Transferred, Received, Reclaimed }
-
-    uint constant public MAX_DAYS = 7 days;
-    uint public trxFee;
-    uint public trxFeeBalance;
-    Counters.Counter private counter;
-
-    mapping(uint => Transaction) private remittances;
-
-    event RemittanceTransferred(
-        uint indexed trxId,
-        address indexed sender,
-        address indexed recipient,
-        uint amount,
-        uint puzzle,
-        uint deadline
-    );
-
-    event RemittanceReceived(
-        uint indexed trxId,
-        address indexed recipient,
-        uint amount,
-        uint fee
-    );
-
-    event RemittanceReclaimed(
-        uint indexed trxId,
-        address indexed sender,
-        uint amount,
-        uint fee
-    );
+    enum RemittanceStatus {
+        NotSet,      // 0 - status not set
+        Transferred, // 1 - start - funds transferred from sender to contract (in escrow)
+        Received,    // 2 - finish - recipient (exchange) withdraw funds (receive) from contract
+        Reclaimed    // 3 - finish - sender withdraw unclaimed funds (reclaim) from contract, after deadline is reached
+    }
 
     struct Transaction {
         address sender;
         address recipient;
         uint amount;
-        uint puzzle;
+        uint fee;
         uint deadline;
         RemittanceStatus status;
     }
 
+    // Amount to be charged per remittance.
+    uint public remittanceFee;
+
+    // Total balance of fees collected from remittances.
+    uint public remittanceFeeBalance;
+
+    // Key is remittance unique ID.
+    mapping(bytes32 => Transaction) private remittances;
+
+    event RemittanceTransferred(
+        bytes32 indexed remittanceId,
+        address indexed sender,
+        address indexed recipient,
+        uint amount,
+        uint fee,
+        uint deadline
+    );
+
+    event RemittanceReceived(
+        bytes32 indexed remittanceId,
+        address indexed recipient,
+        uint amount
+    );
+
+    event RemittanceReclaimed(
+        bytes32 indexed remittanceId,
+        address indexed sender,
+        uint amount
+    );
+
     modifier validClaim(
-        address _trxAccount,
-        RemittanceStatus _trxStatus,
-        uint _part1,
-        uint _part2,
-        uint _trxPuzzle)
+        bool _isReclaim,
+        bytes32 _remittanceId,
+        bytes32 _secret1,
+        bytes32 _secret2)
     {
-        require(msg.sender == _trxAccount, "account mismatch");
-        require(_trxStatus == RemittanceStatus.Transferred, "not transferred");
-        require(bytes32(_part1).length != 32, "invalid part 1");
-        require(bytes32(_part2).length != 32, "invalid part 2");
-        bytes32 _puzzle = keccak256(abi.encodePacked(_part1, _part2));
-        require(uint(_puzzle) == _trxPuzzle, "puzzle mismatch");
+        Transaction storage _remittance = remittances[_remittanceId];
+        require(_remittance.status == RemittanceStatus.Transferred, "not transferred");
+        require(msg.sender == (_isReclaim ? _remittance.sender : _remittance.recipient), "account mismatch");
+        bytes32 _id = _isReclaim
+            ? remittanceId(msg.sender, _remittance.recipient, _secret1, _secret2)
+            : remittanceId(_remittance.sender, msg.sender, _secret1, _secret2);
+        require(_id == _remittanceId, "remittance ID mismatch");
         _;
     }
 
-    constructor(uint _trxFee) public {
-        trxFee = _trxFee;
+    constructor(uint _fee) public {
+        setFee(_fee);
     }
 
-    function transfer(address _recipient, uint _puzzle, uint _deadline)
+    function transfer(bytes32 _remittanceId, address _recipient, uint _deadline)
         external
         payable
         whenNotPaused
-        returns (uint _trxId)
     {
         require(_recipient != address(0x0), "invalid recipient");
-        require(bytes32(_puzzle).length != 32, "invalid puzzle");
+        require(remittances[_remittanceId].status == RemittanceStatus.NotSet, "existing puzzle");
         require(msg.value != uint(0), "value is zero");
-        require(msg.value > trxFee, "value less than fee");
-        require(_deadline >= uint(1 days) && _deadline <= MAX_DAYS, "invalid deadline");
-        counter.increment();
-        _trxId = counter.current();
-        Transaction memory _trx = Transaction({
+        require(msg.value > remittanceFee, "value less than fee");
+        require(msg.value.sub(remittanceFee) != uint(0), "amount after fee is zero");
+        require(_deadline >= 1 days && _deadline <= 7 days, "invalid deadline");
+        remittanceFeeBalance = remittanceFeeBalance.add(remittanceFee);
+        Transaction memory _remittance = Transaction({
             sender: msg.sender,
             recipient: _recipient,
-            amount: msg.value,
-            puzzle: _puzzle,
+            amount: msg.value.sub(remittanceFee),
+            fee: remittanceFee,
             deadline: block.timestamp.add(_deadline),
             status: RemittanceStatus.Transferred
         });
-        remittances[_trxId] = _trx;
-        emit RemittanceTransferred(_trxId, msg.sender, _recipient, msg.value, _puzzle, _deadline);
-        return _trxId;
+        remittances[_remittanceId] = _remittance;
+        emit RemittanceTransferred(
+            _remittanceId,
+            _remittance.sender,
+            _remittance.recipient,
+            _remittance.amount,
+            _remittance.fee,
+            _remittance.deadline);
     }
 
-    function receive(uint _trxId, uint _part1, uint _part2)
+    function receive(bytes32 _remittanceId, bytes32 _secret1, bytes32 _secret2)
         external
         whenNotPaused
-        validClaim(
-            remittances[_trxId].recipient,
-            remittances[_trxId].status,
-            _part1,
-            _part2,
-            remittances[_trxId].puzzle)
+        validClaim(false, _remittanceId, _secret1, _secret2)
     {
-        remittances[_trxId].status = RemittanceStatus.Received;
-        uint _amount = remittances[_trxId].amount.sub(trxFee);
-        trxFeeBalance = trxFeeBalance.add(trxFee);
+        remittances[_remittanceId].status = RemittanceStatus.Received;
+        uint _amount = remittances[_remittanceId].amount;
         msg.sender.transfer(_amount);
-        emit RemittanceReceived(_trxId, msg.sender, _amount, trxFee);
+        emit RemittanceReceived(_remittanceId, msg.sender, _amount);
     }
 
-    function reclaim(uint _trxId, uint _part1, uint _part2)
+    function reclaim(bytes32 _remittanceId, bytes32 _secret1, bytes32 _secret2)
         external
         whenNotPaused
-        validClaim(
-            remittances[_trxId].sender,
-            remittances[_trxId].status,
-            _part1,
-            _part2,
-            remittances[_trxId].puzzle)
+        validClaim(true, _remittanceId, _secret1, _secret2)
     {
-        require(block.timestamp <= remittances[_trxId].deadline, "too early to reclaim");
-        remittances[_trxId].status = RemittanceStatus.Reclaimed;
-        uint _amount = remittances[_trxId].amount.sub(trxFee);
-        trxFeeBalance = trxFeeBalance.add(trxFee);
+        require(block.timestamp <= remittances[_remittanceId].deadline, "too early to reclaim");
+        remittances[_remittanceId].status = RemittanceStatus.Reclaimed;
+        uint _amount = remittances[_remittanceId].amount;
         msg.sender.transfer(_amount);
-        emit RemittanceReclaimed(_trxId, msg.sender, _amount, trxFee);
+        emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
+    }
+
+    function remittanceInfo(bytes32 _remittanceId)
+        external
+        view
+        whenNotPaused
+        returns (address sender, address recipient, uint amount, uint fee, uint deadline, uint status)
+    {
+        Transaction storage _remittance = remittances[_remittanceId];
+        return (
+            _remittance.sender,
+            _remittance.recipient,
+            _remittance.amount,
+            _remittance.fee,
+            _remittance.deadline,
+            uint(_remittance.status)
+        );
+    }
+
+    function setFee(uint _fee) public onlyOwner whenNotPaused {
+        require(_fee != uint(0), "fee cannot be zero");
+        if(_fee != remittanceFee) {
+            remittanceFee = _fee;
+        }
+    }
+
+    function remittanceId(
+        address _sender,
+        address _recipient,
+        bytes32 _part1,
+        bytes32 _part2)
+        public
+        pure
+        returns (bytes32 id)
+    {
+        require(_sender != address(0x0), "invalid sender");
+        require(_recipient != address(0x0), "invalid recipient");
+        id = keccak256(abi.encodePacked(_sender, _recipient, _part1, _part2));
     }
 }
