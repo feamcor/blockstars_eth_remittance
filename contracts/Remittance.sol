@@ -11,30 +11,21 @@ import "openzeppelin-solidity/contracts/lifecycle/Pausable.sol";
 contract Remittance is Ownable, Pausable {
     using SafeMath for uint;
 
-    enum RemittanceStatus {
-        NotSet,      // 0 - status not set
-        Transferred, // 1 - start - funds transferred from sender to contract (in escrow)
-        Received,    // 2 - finish - recipient (exchange) withdraw funds (receive) from contract
-        Reclaimed    // 3 - finish - sender withdraw unclaimed funds (reclaim) from contract, after deadline is reached
-    }
-
     struct Transaction {
         address sender;
         address recipient;
         uint amount;
-        uint fee;
         uint deadline;
-        RemittanceStatus status;
     }
 
     // Amount to be charged per remittance.
-    uint public remittanceFee;
+    uint private remittanceFee;
 
     // Total balance of fees collected from remittances.
     uint public remittanceFeeBalance;
 
     // Key is remittance unique ID.
-    mapping(bytes32 => Transaction) private remittances;
+    mapping(bytes32 => Transaction) public remittances;
 
     event RemittanceTransferred(
         bytes32 indexed remittanceId,
@@ -60,15 +51,14 @@ contract Remittance is Ownable, Pausable {
     modifier validClaim(
         bool _isReclaim,
         bytes32 _remittanceId,
-        bytes32 _secret1,
-        bytes32 _secret2)
+        bytes32 _secret)
     {
         Transaction storage _remittance = remittances[_remittanceId];
-        require(_remittance.status == RemittanceStatus.Transferred, "not transferred");
+        require(_remittance.recipient != address(0x0), "not set or already claimed");
         require(msg.sender == (_isReclaim ? _remittance.sender : _remittance.recipient), "account mismatch");
         bytes32 _id = _isReclaim
-            ? remittanceId(msg.sender, _remittance.recipient, _secret1, _secret2)
-            : remittanceId(_remittance.sender, msg.sender, _secret1, _secret2);
+            ? remittanceId(address(this), msg.sender, _remittance.recipient, _secret)
+            : remittanceId(address(this), _remittance.sender, msg.sender, _secret);
         require(_id == _remittanceId, "remittance ID mismatch");
         _;
     }
@@ -77,25 +67,28 @@ contract Remittance is Ownable, Pausable {
         setFee(_fee);
     }
 
+    function release(bytes32 _remittanceId) private {
+        Transaction storage _remittance = remittances[_remittanceId];
+        _remittance.recipient = address(0x0);
+        _remittance.amount = uint(0);
+        _remittance.deadline = uint(0);
+    }
+
     function transfer(bytes32 _remittanceId, address _recipient, uint _deadline)
         external
         payable
         whenNotPaused
     {
         require(_recipient != address(0x0), "invalid recipient");
-        require(remittances[_remittanceId].status == RemittanceStatus.NotSet, "existing puzzle");
-        require(msg.value != uint(0), "value is zero");
+        require(remittances[_remittanceId].sender == address(0x0), "previous remittance");
         require(msg.value > remittanceFee, "value less than fee");
-        require(msg.value.sub(remittanceFee) != uint(0), "amount after fee is zero");
         require(_deadline >= 1 days && _deadline <= 7 days, "invalid deadline");
         remittanceFeeBalance = remittanceFeeBalance.add(remittanceFee);
         Transaction memory _remittance = Transaction({
             sender: msg.sender,
             recipient: _recipient,
             amount: msg.value.sub(remittanceFee),
-            fee: remittanceFee,
-            deadline: block.timestamp.add(_deadline),
-            status: RemittanceStatus.Transferred
+            deadline: block.timestamp.add(_deadline)
         });
         remittances[_remittanceId] = _remittance;
         emit RemittanceTransferred(
@@ -103,48 +96,35 @@ contract Remittance is Ownable, Pausable {
             _remittance.sender,
             _remittance.recipient,
             _remittance.amount,
-            _remittance.fee,
+            remittanceFee,
             _remittance.deadline);
     }
 
-    function receive(bytes32 _remittanceId, bytes32 _secret1, bytes32 _secret2)
+    function receive(bytes32 _remittanceId, bytes32 _secret)
         external
         whenNotPaused
-        validClaim(false, _remittanceId, _secret1, _secret2)
+        validClaim(false, _remittanceId, _secret)
     {
-        remittances[_remittanceId].status = RemittanceStatus.Received;
         uint _amount = remittances[_remittanceId].amount;
+        release(_remittanceId);
         msg.sender.transfer(_amount);
         emit RemittanceReceived(_remittanceId, msg.sender, _amount);
     }
 
-    function reclaim(bytes32 _remittanceId, bytes32 _secret1, bytes32 _secret2)
+    function reclaim(bytes32 _remittanceId, bytes32 _secret)
         external
         whenNotPaused
-        validClaim(true, _remittanceId, _secret1, _secret2)
+        validClaim(true, _remittanceId, _secret)
     {
         require(block.timestamp <= remittances[_remittanceId].deadline, "too early to reclaim");
-        remittances[_remittanceId].status = RemittanceStatus.Reclaimed;
         uint _amount = remittances[_remittanceId].amount;
+        release(_remittanceId);
         msg.sender.transfer(_amount);
         emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
     }
 
-    function remittanceInfo(bytes32 _remittanceId)
-        external
-        view
-        whenNotPaused
-        returns (address sender, address recipient, uint amount, uint fee, uint deadline, uint status)
-    {
-        Transaction storage _remittance = remittances[_remittanceId];
-        return (
-            _remittance.sender,
-            _remittance.recipient,
-            _remittance.amount,
-            _remittance.fee,
-            _remittance.deadline,
-            uint(_remittance.status)
-        );
+    function fee() public view whenNotPaused returns (uint) {
+        return remittanceFee;
     }
 
     function setFee(uint _fee) public onlyOwner whenNotPaused {
@@ -155,16 +135,16 @@ contract Remittance is Ownable, Pausable {
     }
 
     function remittanceId(
+        address _contract,
         address _sender,
         address _recipient,
-        bytes32 _part1,
-        bytes32 _part2)
+        bytes32 _secret)
         public
         pure
         returns (bytes32 id)
     {
         require(_sender != address(0x0), "invalid sender");
         require(_recipient != address(0x0), "invalid recipient");
-        id = keccak256(abi.encodePacked(_sender, _recipient, _part1, _part2));
+        id = keccak256(abi.encodePacked(_contract, _sender, _recipient, _secret));
     }
 }
