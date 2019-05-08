@@ -166,14 +166,14 @@ contract Remittance is Ownable, Pausable {
 
     /// @notice Return current remittance fee
     /// @return remittance fee
-    function fee() public view whenNotPaused returns (uint) {
+    function fee() public view returns (uint) {
         return remittanceFee;
     }
 
     /// @notice Set remittance fee
     /// @param _fee remittance fee value
     /// @dev Emit `RemittanceFeeSet` event
-    function setFee(uint _fee) public onlyOwner whenNotPaused {
+    function setFee(uint _fee) public onlyOwner {
         require(_fee != uint(0), "fee cannot be zero");
         if(_fee != remittanceFee) {
             emit RemittanceFeeSet(_fee);
