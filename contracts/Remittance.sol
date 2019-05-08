@@ -113,7 +113,6 @@ contract Remittance is Ownable, Pausable {
             amount: msg.value.sub(remittanceFee),
             deadline: block.timestamp.add(_deadline)
         });
-        remittances[_remittanceId] = _remittance;
         emit RemittanceTransferred(
             _remittanceId,
             _remittance.sender,
@@ -121,6 +120,7 @@ contract Remittance is Ownable, Pausable {
             _remittance.amount,
             remittanceFee,
             _remittance.deadline);
+        remittances[_remittanceId] = _remittance;
     }
 
     /// @notice Complete remittance by transferring funds in escrow from contract to recipient
@@ -133,9 +133,9 @@ contract Remittance is Ownable, Pausable {
         validClaim(false, _remittanceId, _secret)
     {
         uint _amount = remittances[_remittanceId].amount;
+        emit RemittanceReceived(_remittanceId, msg.sender, _amount);
         release(_remittanceId);
         msg.sender.transfer(_amount);
-        emit RemittanceReceived(_remittanceId, msg.sender, _amount);
     }
 
     /// @notice Revert remittance by transferring funds in escrow from contract to sender, after deadline
@@ -149,9 +149,9 @@ contract Remittance is Ownable, Pausable {
     {
         require(block.timestamp <= remittances[_remittanceId].deadline, "too early to reclaim");
         uint _amount = remittances[_remittanceId].amount;
+        emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
         release(_remittanceId);
         msg.sender.transfer(_amount);
-        emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
     }
 
     /// @notice Withdraw accumulated remittance fees
@@ -159,9 +159,9 @@ contract Remittance is Ownable, Pausable {
     function withdraw() external whenNotPaused onlyOwner {
         uint _balance = remittanceFeeBalance;
         require(_balance != uint(0), "no balance available");
+        emit RemittanceFeeWithdrew(_balance);
         remittanceFeeBalance = uint(0);
         msg.sender.transfer(_balance);
-        emit RemittanceFeeWithdrew(_balance);
     }
 
     /// @notice Return current remittance fee
@@ -176,8 +176,8 @@ contract Remittance is Ownable, Pausable {
     function setFee(uint _fee) public onlyOwner whenNotPaused {
         require(_fee != uint(0), "fee cannot be zero");
         if(_fee != remittanceFee) {
-            remittanceFee = _fee;
             emit RemittanceFeeSet(_fee);
+            remittanceFee = _fee;
         }
     }
 
