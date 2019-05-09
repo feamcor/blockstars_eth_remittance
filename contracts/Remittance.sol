@@ -144,7 +144,7 @@ contract Remittance is Ownable, Pausable {
         require(_remittance.amount != uint(0), "remittance already claimed");
         require(_remittance.sender == msg.sender, "sender mismatch");
         require(_remittance.recipient == _recipient, "recipient mismatch");
-        require(block.timestamp <= remittances[_remittanceId].deadline, "too early to reclaim");
+        require(block.timestamp > remittances[_remittanceId].deadline, "too early to reclaim");
         uint _amount = remittances[_remittanceId].amount;
         emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
         release(_remittanceId);
@@ -186,7 +186,7 @@ contract Remittance is Ownable, Pausable {
     /// @param _min Minimum number of seconds (not zero, less than max)
     /// @param _max Maximum number of seconds (greater than min)
     function setDeadlineRange(uint _min, uint _max) public onlyOwner {
-        require(_min > uint(0), "min cannot be zero");
+        require(_min != uint(0), "min cannot be zero");
         require(_max >= _min, "max must be >= min");
         emit RemittanceDeadlineRangeSet(msg.sender, _min, _max);
         deadlineRangeMin = _min;

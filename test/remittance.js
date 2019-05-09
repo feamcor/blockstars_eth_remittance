@@ -6,6 +6,10 @@ const { toBN, toWei, asciiToHex } = web3.utils;
 const { getBalance } = web3.eth;
 const Remittance = artifacts.require("Remittance");
 
+const sleep = milliseconds => {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+};
+
 contract("Remittance", accounts => {
   const BN_0 = toBN("0");
   const BN_1ETH = toBN(toWei("1", "ether"));
@@ -15,6 +19,7 @@ contract("Remittance", accounts => {
   const BN_LT_MIN = toBN(1);
   const BN_MIN = toBN(3);
   const BN_DEADLINE = toBN(5);
+  const DEADLINE_MS = 6 * 1000;
   const BN_MAX = toBN(7);
   const BN_GT_MAX = toBN(9);
   const ZEROx0 = "0x0000000000000000000000000000000000000000";
@@ -269,6 +274,120 @@ contract("Remittance", accounts => {
         "contract balance mismatch"
       );
       const balance2b = toBN(await getBalance(BOB));
+      const gasUsed2b = toBN(result.receipt.gasUsed);
+      const transact2b = await web3.eth.getTransaction(result.tx);
+      const gasPrice2b = toBN(transact2b.gasPrice);
+      assert.isTrue(
+        balance2b
+          .add(gasUsed2b.mul(gasPrice2b))
+          .sub(balance2a)
+          .eq(BN_1ETH.sub(BN_FEE)),
+        "recipient balance mismatch"
+      );
+      const info = await REMITTANCE.remittances(id);
+      assert.strictEqual(info.sender, ZEROx0, "sender not released");
+      assert.strictEqual(info.recipient, ZEROx0, "recipient not released");
+      assert.isTrue(info.amount.eq(BN_0), "amount not released");
+      assert.isFalse(info.deadline.eq(BN_0), "deadline was released");
+    });
+  });
+
+  describe("Function: reclaim", () => {
+    it("should revert on remittance not set", async () => {
+      await reverts(
+        REMITTANCE.reclaim(BOB, FAKE_ID, { from: ALICE }),
+        "remittance not set"
+      );
+    });
+
+    it("should revert on remittance already claimed", async () => {
+      const secret = new Array();
+      uuidv4(null, secret, 0);
+      const id = await REMITTANCE.generateRemittanceId(
+        REMITTANCE.address,
+        ALICE,
+        BOB,
+        secret
+      );
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
+        from: ALICE,
+        value: BN_1ETH
+      });
+      await REMITTANCE.receive(ALICE, secret, { from: BOB });
+      await reverts(
+        REMITTANCE.reclaim(BOB, secret, { from: ALICE }),
+        "remittance already claimed"
+      );
+    });
+
+    it("should revert on remittance not found", async () => {
+      const secret = new Array();
+      uuidv4(null, secret, 0);
+      const id = await REMITTANCE.generateRemittanceId(
+        REMITTANCE.address,
+        ALICE,
+        BOB,
+        secret
+      );
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
+        from: ALICE,
+        value: BN_1ETH
+      });
+      await reverts(
+        REMITTANCE.reclaim(BOB, FAKE_ID, { from: ALICE }),
+        "remittance not set"
+      );
+    });
+
+    it("should revert on too early to reclaim", async () => {
+      const secret = new Array();
+      uuidv4(null, secret, 0);
+      const id = await REMITTANCE.generateRemittanceId(
+        REMITTANCE.address,
+        ALICE,
+        BOB,
+        secret
+      );
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
+        from: ALICE,
+        value: BN_1ETH
+      });
+      await reverts(
+        REMITTANCE.reclaim(BOB, secret, { from: ALICE }),
+        "too early to reclaim"
+      );
+    });
+
+    it("should complete remittance (reclaim)", async () => {
+      const secret = new Array();
+      uuidv4(null, secret, 0);
+      const id = await REMITTANCE.generateRemittanceId(
+        REMITTANCE.address,
+        ALICE,
+        BOB,
+        secret
+      );
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
+        from: ALICE,
+        value: BN_1ETH
+      });
+      const balance1a = toBN(await getBalance(REMITTANCE.address));
+      const balance2a = toBN(await getBalance(ALICE));
+      await sleep(DEADLINE_MS);
+      const result = await REMITTANCE.reclaim(BOB, secret, { from: ALICE });
+      await eventEmitted(result, "RemittanceReclaimed", log => {
+        return (
+          log.remittanceId === id &&
+          log.sender === ALICE &&
+          BN_1ETH.sub(BN_FEE).eq(log.amount)
+        );
+      });
+      const balance1b = toBN(await getBalance(REMITTANCE.address));
+      assert.isTrue(
+        balance1a.sub(balance1b).eq(BN_1ETH.sub(BN_FEE)),
+        "contract balance mismatch"
+      );
+      const balance2b = toBN(await getBalance(ALICE));
       const gasUsed2b = toBN(result.receipt.gasUsed);
       const transact2b = await web3.eth.getTransaction(result.tx);
       const gasPrice2b = toBN(transact2b.gasPrice);
