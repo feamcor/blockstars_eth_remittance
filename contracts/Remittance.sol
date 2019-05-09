@@ -27,9 +27,9 @@ contract Remittance is Ownable, Pausable {
     // Key is remittance unique ID.
     mapping(bytes32 => Transaction) public remittances;
 
-    event RemittanceFeeSet(uint fee);
+    event RemittanceFeeSet(address by, uint fee);
 
-    event RemittanceFeeWithdrew(uint balance);
+    event RemittanceFeeWithdrew(address by, uint balance);
 
     event RemittanceTransferred(
         bytes32 indexed remittanceId,
@@ -159,7 +159,7 @@ contract Remittance is Ownable, Pausable {
     function withdraw() external whenNotPaused onlyOwner {
         uint _balance = remittanceFeeBalance;
         require(_balance != uint(0), "no balance available");
-        emit RemittanceFeeWithdrew(_balance);
+        emit RemittanceFeeWithdrew(msg.sender, _balance);
         remittanceFeeBalance = uint(0);
         msg.sender.transfer(_balance);
     }
@@ -176,7 +176,7 @@ contract Remittance is Ownable, Pausable {
     function setFee(uint _fee) public onlyOwner {
         require(_fee != uint(0), "fee cannot be zero");
         if(_fee != remittanceFee) {
-            emit RemittanceFeeSet(_fee);
+            emit RemittanceFeeSet(msg.sender, _fee);
             remittanceFee = _fee;
         }
     }
