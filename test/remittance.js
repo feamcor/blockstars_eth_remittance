@@ -12,16 +12,18 @@ contract("Remittance", accounts => {
   const BN_HETH = toBN(toWei("0.5", "ether"));
   const BN_FEE = toBN(toWei("0.05", "ether"));
   const FAKE_ID = asciiToHex("FAKE ID");
-  const BN_12H = toBN(60 * 60 * 12);
-  const BN_1D = toBN(60 * 60 * 24);
-  const BN_8D = toBN(60 * 60 * 24 * 8);
+  const BN_LT_MIN = toBN(1);
+  const BN_MIN = toBN(3);
+  const BN_DEADLINE = toBN(5);
+  const BN_MAX = toBN(7);
+  const BN_GT_MAX = toBN(9);
   const ZEROx0 = "0x0000000000000000000000000000000000000000";
 
   const [ALICE, BOB, CAROL, SOMEONE] = accounts;
   let REMITTANCE;
 
   beforeEach("Initialization", async () => {
-    REMITTANCE = await Remittance.new(BN_FEE, { from: ALICE });
+    REMITTANCE = await Remittance.new(BN_FEE, BN_MIN, BN_MAX, { from: ALICE });
   });
 
   describe("Function: constructor", () => {
@@ -92,7 +94,7 @@ contract("Remittance", accounts => {
   describe("Function: transfer", () => {
     it("should revert on invalid recipient", async () => {
       await reverts(
-        REMITTANCE.transfer(FAKE_ID, ZEROx0, BN_0, {
+        REMITTANCE.transfer(FAKE_ID, ZEROx0, BN_DEADLINE, {
           from: ALICE
         }),
         "invalid recipient"
@@ -100,12 +102,12 @@ contract("Remittance", accounts => {
     });
 
     it("should revert on previous remittance", async () => {
-      await REMITTANCE.transfer(FAKE_ID, BOB, BN_1D, {
+      await REMITTANCE.transfer(FAKE_ID, BOB, BN_DEADLINE, {
         from: ALICE,
         value: BN_HETH
       });
       await reverts(
-        REMITTANCE.transfer(FAKE_ID, BOB, BN_1D, {
+        REMITTANCE.transfer(FAKE_ID, BOB, BN_DEADLINE, {
           from: ALICE,
           value: BN_HETH
         }),
@@ -115,7 +117,7 @@ contract("Remittance", accounts => {
 
     it("should revert on value less than fee", async () => {
       await reverts(
-        REMITTANCE.transfer(FAKE_ID, BOB, BN_1D, {
+        REMITTANCE.transfer(FAKE_ID, BOB, BN_DEADLINE, {
           from: ALICE,
           value: BN_0
         }),
@@ -123,30 +125,30 @@ contract("Remittance", accounts => {
       );
     });
 
-    it("should revert on deadline less than min", async () => {
+    it("should revert on deadline out of range (LT min)", async () => {
       await reverts(
-        REMITTANCE.transfer(FAKE_ID, BOB, BN_12H, {
+        REMITTANCE.transfer(FAKE_ID, BOB, BN_LT_MIN, {
           from: ALICE,
           value: BN_HETH
         }),
-        "invalid deadline"
+        "deadline out of range"
       );
     });
 
-    it("should revert on deadline more than max", async () => {
+    it("should revert on deadline out of range (GT max)", async () => {
       await reverts(
-        REMITTANCE.transfer(FAKE_ID, BOB, BN_8D, {
+        REMITTANCE.transfer(FAKE_ID, BOB, BN_GT_MAX, {
           from: ALICE,
           value: BN_HETH
         }),
-        "invalid deadline"
+        "deadline out of range"
       );
     });
 
     it("should start remittance (transfer)", async () => {
       const secret = new Array();
       uuidv4(null, secret, 0);
-      const id = await REMITTANCE.remittanceId(
+      const id = await REMITTANCE.generateRemittanceId(
         REMITTANCE.address,
         ALICE,
         BOB,
@@ -154,7 +156,7 @@ contract("Remittance", accounts => {
       );
       const balance1a = toBN(await getBalance(REMITTANCE.address));
       const balance2a = toBN(await getBalance(ALICE));
-      const result = await REMITTANCE.transfer(id, BOB, BN_1D, {
+      const result = await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
         from: ALICE,
         value: BN_1ETH
       });
@@ -192,68 +194,68 @@ contract("Remittance", accounts => {
   });
 
   describe("Function: receive", () => {
-    it("should revert on not set or already claimed (not set)", async () => {
+    it("should revert on remittance not set", async () => {
       await reverts(
-        REMITTANCE.receive(FAKE_ID, FAKE_ID, { from: ALICE }),
-        "not set or already claimed"
+        REMITTANCE.receive(ALICE, FAKE_ID, { from: BOB }),
+        "remittance not set"
       );
     });
 
-    it("should revert on not set or already claimed (claimed)", async () => {
+    it("should revert on remittance already claimed", async () => {
       const secret = new Array();
       uuidv4(null, secret, 0);
-      const id = await REMITTANCE.remittanceId(
+      const id = await REMITTANCE.generateRemittanceId(
         REMITTANCE.address,
         ALICE,
         BOB,
         secret
       );
-      await REMITTANCE.transfer(id, BOB, BN_1D, {
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
         from: ALICE,
         value: BN_1ETH
       });
-      await REMITTANCE.receive(id, secret, { from: BOB });
+      await REMITTANCE.receive(ALICE, secret, { from: BOB });
       await reverts(
-        REMITTANCE.receive(id, secret, { from: BOB }),
-        "not set or already claimed"
+        REMITTANCE.receive(ALICE, secret, { from: BOB }),
+        "remittance already claimed"
       );
     });
 
-    it("should revert remittance ID mismatch", async () => {
+    it("should revert on remittance not found", async () => {
       const secret = new Array();
       uuidv4(null, secret, 0);
-      const id = await REMITTANCE.remittanceId(
+      const id = await REMITTANCE.generateRemittanceId(
         REMITTANCE.address,
         ALICE,
         BOB,
         secret
       );
-      await REMITTANCE.transfer(id, BOB, BN_1D, {
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
         from: ALICE,
         value: BN_1ETH
       });
       await reverts(
-        REMITTANCE.receive(id, FAKE_ID, { from: BOB }),
-        "remittance ID mismatch"
+        REMITTANCE.receive(ALICE, FAKE_ID, { from: BOB }),
+        "remittance not set"
       );
     });
 
     it("should complete remittance (receive)", async () => {
       const secret = new Array();
       uuidv4(null, secret, 0);
-      const id = await REMITTANCE.remittanceId(
+      const id = await REMITTANCE.generateRemittanceId(
         REMITTANCE.address,
         ALICE,
         BOB,
         secret
       );
-      await REMITTANCE.transfer(id, BOB, BN_1D, {
+      await REMITTANCE.transfer(id, BOB, BN_DEADLINE, {
         from: ALICE,
         value: BN_1ETH
       });
       const balance1a = toBN(await getBalance(REMITTANCE.address));
       const balance2a = toBN(await getBalance(BOB));
-      const result = await REMITTANCE.receive(id, secret, { from: BOB });
+      const result = await REMITTANCE.receive(ALICE, secret, { from: BOB });
       await eventEmitted(result, "RemittanceReceived", log => {
         return (
           log.remittanceId === id &&
@@ -278,10 +280,10 @@ contract("Remittance", accounts => {
         "recipient balance mismatch"
       );
       const info = await REMITTANCE.remittances(id);
-      assert.strictEqual(info.sender, ALICE, "sender mismatch");
-      assert.strictEqual(info.recipient, ZEROx0, "recipient mismatch");
-      assert.isTrue(info.amount.eq(BN_0), "amount mismatch");
-      assert.isTrue(info.deadline.eq(BN_0), "deadline mismatch");
+      assert.strictEqual(info.sender, ZEROx0, "sender not released");
+      assert.strictEqual(info.recipient, ZEROx0, "recipient not released");
+      assert.isTrue(info.amount.eq(BN_0), "amount not released");
+      assert.isFalse(info.deadline.eq(BN_0), "deadline was released");
     });
   });
 });

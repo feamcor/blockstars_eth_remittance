@@ -20,16 +20,20 @@ contract Remittance is Ownable, Pausable {
 
     // Amount to be charged per remittance.
     uint private remittanceFee;
-
     // Total balance of fees collected from remittances.
     uint public remittanceFeeBalance;
-
+    // Minimum number of seconds before a remittance could be reclaimed.
+    uint private deadlineRangeMin;
+    // Maximum number of seconds before a remittance could be reclaimed.
+    uint private deadlineRangeMax;
     // Key is remittance unique ID.
     mapping(bytes32 => Transaction) public remittances;
 
     event RemittanceFeeSet(address by, uint fee);
 
     event RemittanceFeeWithdrew(address by, uint balance);
+
+    event RemittanceDeadlineRangeSet(address by, uint mix, uint max);
 
     event RemittanceTransferred(
         bytes32 indexed remittanceId,
@@ -52,48 +56,31 @@ contract Remittance is Ownable, Pausable {
         uint amount
     );
 
-    modifier validClaim(
-        bool _isReclaim,
-        bytes32 _remittanceId,
-        bytes32 _secret)
-    {
-        Transaction storage _remittance = remittances[_remittanceId];
-        // If recipient address is 0x0, then remittance ID refers to a
-        // remittance that does not exist, or that was released after a
-        // valid claim throuhg `receive` or `reclaim` functions.
-        require(_remittance.recipient != address(0x0), "not set or already claimed");
-        // Check that sender is the correct one, depending on type of claim.
-        require(msg.sender == (_isReclaim ? _remittance.sender : _remittance.recipient), "account mismatch");
-        bytes32 _id = _isReclaim
-            ? remittanceId(address(this), msg.sender, _remittance.recipient, _secret)
-            : remittanceId(address(this), _remittance.sender, msg.sender, _secret);
-        // Check that remittance being claimed is the one that the secret would refer to.
-        require(_id == _remittanceId, "remittance ID mismatch");
-        _;
-    }
-
     /// @notice Instantiate contract and set its initial remittance fee
     /// @param _fee amount to be set as remittance fee
+    /// @param _min minimum number of seconds before remittance could be reclaimed
+    /// @param _max maximum number of seconds before remittance could be reclaimed
     /// @dev Emit `RemittanceFeeSet` event
-    constructor(uint _fee) public {
+    constructor(uint _fee, uint _min, uint _max) public {
         setFee(_fee);
+        setDeadlineRange(_min, _max);
     }
 
     /// @notice Set remittance attributes to zero, for releasing storage
     /// @param _remittanceId id of the remittance to be released
     function release(bytes32 _remittanceId) private {
         Transaction storage _remittance = remittances[_remittanceId];
-        // Sender is not set as 0x0 in order to keep track of previous IDs.
+        _remittance.sender = address(0x0);
         _remittance.recipient = address(0x0);
         _remittance.amount = uint(0);
-        _remittance.deadline = uint(0);
+        // _remittance.deadline is not zeroed in order to keep track of previous remittance IDs.
     }
 
     /// @notice Start remittance by transferring funds from sender to contract, in escrow
     /// @notice Recipient will claim the funds on a final step
     /// @param _remittanceId id of the new remittance
     /// @param _recipient address of the recipient account
-    /// @param _deadline number of seconds before the remittance could be claimed by sender (1..7 days)
+    /// @param _deadline number of seconds before the remittance could be claimed by sender (between min and max)
     /// @dev Emit `RemittanceTransferred` event
     function transfer(bytes32 _remittanceId, address _recipient, uint _deadline)
         external
@@ -101,11 +88,11 @@ contract Remittance is Ownable, Pausable {
         whenNotPaused
     {
         require(_recipient != address(0x0), "invalid recipient");
-        /// Stored sender address must be 0x0, which means that remittance ID is new.
-        require(remittances[_remittanceId].sender == address(0x0), "previous remittance");
+        /// Stored remittance deadline must be zero, which means that remittance ID is new.
+        require(remittances[_remittanceId].deadline == uint(0), "previous remittance");
         /// Value transferred must be enough for remittance amount and fee.
         require(msg.value > remittanceFee, "value less than fee");
-        require(_deadline >= 1 days && _deadline <= 7 days, "invalid deadline");
+        require(_deadline >= deadlineRangeMin && _deadline <= deadlineRangeMax, "deadline out of range");
         remittanceFeeBalance = remittanceFeeBalance.add(remittanceFee);
         Transaction memory _remittance = Transaction({
             sender: msg.sender,
@@ -124,14 +111,19 @@ contract Remittance is Ownable, Pausable {
     }
 
     /// @notice Complete remittance by transferring funds in escrow from contract to recipient
-    /// @param _remittanceId id of the remittance to be claimed
+    /// @param _sender address of the sender account
     /// @param _secret secret key used to generate the remittance ID and validate this transaction
     /// @dev Emit `RemittanceReceived` event
-    function receive(bytes32 _remittanceId, bytes32 _secret)
+    function receive(address _sender, bytes32 _secret)
         external
         whenNotPaused
-        validClaim(false, _remittanceId, _secret)
     {
+        bytes32 _remittanceId = generateRemittanceId(address(this), _sender, msg.sender, _secret);
+        Transaction storage _remittance = remittances[_remittanceId];
+        require(_remittance.deadline != uint(0), "remittance not set");
+        require(_remittance.amount != uint(0), "remittance already claimed");
+        require(_remittance.sender == _sender, "sender mismatch");
+        require(_remittance.recipient == msg.sender, "recipient mismatch");
         uint _amount = remittances[_remittanceId].amount;
         emit RemittanceReceived(_remittanceId, msg.sender, _amount);
         release(_remittanceId);
@@ -139,14 +131,19 @@ contract Remittance is Ownable, Pausable {
     }
 
     /// @notice Revert remittance by transferring funds in escrow from contract to sender, after deadline
-    /// @param _remittanceId id of the remittance to be claimed
+    /// @param _recipient address of the recipient account
     /// @param _secret secret key used to generate the remittance ID and validate this transaction
     /// @dev Emit `RemittanceReclaimed` event
-    function reclaim(bytes32 _remittanceId, bytes32 _secret)
+    function reclaim(address _recipient, bytes32 _secret)
         external
         whenNotPaused
-        validClaim(true, _remittanceId, _secret)
     {
+        bytes32 _remittanceId = generateRemittanceId(address(this), msg.sender, _recipient, _secret);
+        Transaction storage _remittance = remittances[_remittanceId];
+        require(_remittance.deadline != uint(0), "remittance not set");
+        require(_remittance.amount != uint(0), "remittance already claimed");
+        require(_remittance.sender == msg.sender, "sender mismatch");
+        require(_remittance.recipient == _recipient, "recipient mismatch");
         require(block.timestamp <= remittances[_remittanceId].deadline, "too early to reclaim");
         uint _amount = remittances[_remittanceId].amount;
         emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
@@ -175,10 +172,25 @@ contract Remittance is Ownable, Pausable {
     /// @dev Emit `RemittanceFeeSet` event
     function setFee(uint _fee) public onlyOwner {
         require(_fee != uint(0), "fee cannot be zero");
-        if(_fee != remittanceFee) {
-            emit RemittanceFeeSet(msg.sender, _fee);
-            remittanceFee = _fee;
-        }
+        emit RemittanceFeeSet(msg.sender, _fee);
+        remittanceFee = _fee;
+    }
+
+    /// @notice Return deadline range
+    /// @return Minimum (start) and maximum (end) number of seconds
+    function deadlineRange() public view returns (uint min, uint max) {
+        return (deadlineRangeMin, deadlineRangeMax);
+    }
+
+    /// @notice Set deadline range
+    /// @param _min Minimum number of seconds (not zero, less than max)
+    /// @param _max Maximum number of seconds (greater than min)
+    function setDeadlineRange(uint _min, uint _max) public onlyOwner {
+        require(_min > uint(0), "min cannot be zero");
+        require(_max >= _min, "max must be >= min");
+        emit RemittanceDeadlineRangeSet(msg.sender, _min, _max);
+        deadlineRangeMin = _min;
+        deadlineRangeMax = _max;
     }
 
     /// @notice Helper function to generate unique remittance ID
@@ -188,7 +200,7 @@ contract Remittance is Ownable, Pausable {
     /// @param _secret key generated by sender as secret validation factor
     /// @return Remittance ID calculated based on the input parameters
     /// @dev Function is pure to ensure non-visibility through blockchain
-    function remittanceId(
+    function generateRemittanceId(
         address _contract,
         address _sender,
         address _recipient,
