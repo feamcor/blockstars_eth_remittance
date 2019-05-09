@@ -5,7 +5,7 @@ module.exports = function(deployer) {
   deployer.deploy(
     Remittance,
     toBN(toWei("0.05", "ether")),
-    toBN(60 * 60 * 24), // 1 day
-    toBN(60 * 60 * 24 * 7) // 7 days
+    toBN(60 * 60 * 24), // 1 day in secs
+    toBN(60 * 60 * 24 * 7) // 7 days in secs
   );
 };

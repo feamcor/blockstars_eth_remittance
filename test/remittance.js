@@ -1,14 +1,11 @@
 const uuidv4 = require("uuid/v4");
-// const bytesToUuid = require("uuid/lib/bytesToUuid");
+const truffleHelper = require("./helpers/truffleTestHelper");
+const { advanceTime } = truffleHelper;
 const truffleAssert = require("truffle-assertions");
 const { createTransactionResult, eventEmitted, reverts } = truffleAssert;
 const { toBN, toWei, asciiToHex } = web3.utils;
 const { getBalance } = web3.eth;
 const Remittance = artifacts.require("Remittance");
-
-const sleep = milliseconds => {
-  return new Promise(resolve => setTimeout(resolve, milliseconds));
-};
 
 contract("Remittance", accounts => {
   const BN_0 = toBN("0");
@@ -16,12 +13,12 @@ contract("Remittance", accounts => {
   const BN_HETH = toBN(toWei("0.5", "ether"));
   const BN_FEE = toBN(toWei("0.05", "ether"));
   const FAKE_ID = asciiToHex("FAKE ID");
-  const BN_LT_MIN = toBN(1);
-  const BN_MIN = toBN(3);
-  const BN_DEADLINE = toBN(5);
-  const DEADLINE_MS = 6 * 1000;
-  const BN_MAX = toBN(7);
-  const BN_GT_MAX = toBN(9);
+  const BN_LT_MIN = toBN(60 * 60 * 12); // 12 hours in secs
+  const BN_MIN = toBN(60 * 60 * 24); // 24 hours in secs
+  const BN_DEADLINE = toBN(60 * 60 * 24 * 3); // 3 days in secs
+  const DEADLINE_MS = 60 * 60 * 24 * 3 * 1000; // 3 days in msecs
+  const BN_MAX = toBN(60 * 60 * 24 * 7); // 7 days in secs
+  const BN_GT_MAX = toBN(60 * 60 * 24 * 14); // 14 days in secs
   const ZEROx0 = "0x0000000000000000000000000000000000000000";
 
   const [ALICE, BOB, CAROL, SOMEONE] = accounts;
@@ -389,7 +386,7 @@ contract("Remittance", accounts => {
       });
       const balance1a = toBN(await getBalance(REMITTANCE.address));
       const balance2a = toBN(await getBalance(ALICE));
-      await sleep(DEADLINE_MS);
+      await advanceTime(DEADLINE_MS);
       const result = await REMITTANCE.reclaim(BOB, secret, { from: ALICE });
       await eventEmitted(result, "RemittanceReclaimed", log => {
         return (
