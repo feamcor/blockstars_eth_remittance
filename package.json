@@ -25,6 +25,7 @@
     "openzeppelin-solidity": "^2.2.0",
     "truffle": "^5.0.15",
     "truffle-assertions": "^0.8.2",
-    "truffle-hdwallet-provider": "^1.0.8"
+    "truffle-hdwallet-provider": "^1.0.8",
+    "uuid": "^3.3.2"
   }
 }
