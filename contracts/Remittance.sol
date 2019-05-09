@@ -33,7 +33,7 @@ contract Remittance is Ownable, Pausable {
 
     event RemittanceFeeWithdrew(address by, uint balance);
 
-    event RemittanceDeadlineRangeSet(address by, uint mix, uint max);
+    event RemittanceDeadlineRangeSet(address by, uint min, uint max);
 
     event RemittanceTransferred(
         bytes32 indexed remittanceId,

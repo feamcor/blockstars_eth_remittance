@@ -96,6 +96,22 @@ contract("Remittance", accounts => {
     });
   });
 
+  describe("Function: deadline range getter and setter", () => {
+    it("should change range", async () => {
+      const result = await REMITTANCE.setDeadlineRange(BN_DEADLINE, BN_GT_MAX, {
+        from: ALICE
+      });
+      await eventEmitted(result, "RemittanceDeadlineRangeSet", log => {
+        return (
+          log.by === ALICE && log.min.eq(BN_DEADLINE) && log.max.eq(BN_GT_MAX)
+        );
+      });
+      const range = await REMITTANCE.deadlineRange({ from: ALICE });
+      assert.isTrue(range.min.eq(BN_DEADLINE), "range min mismatch");
+      assert.isTrue(range.max.eq(BN_GT_MAX), "range max mismatch");
+    });
+  });
+
   describe("Function: transfer", () => {
     it("should revert on invalid recipient", async () => {
       await reverts(
