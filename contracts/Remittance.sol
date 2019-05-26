@@ -98,6 +98,7 @@ contract Remittance is Ownable, Pausable {
             sender: msg.sender,
             recipient: _recipient,
             amount: msg.value.sub(remittanceFee),
+            // solium-disable-next-line security/no-block-members
             deadline: block.timestamp.add(_deadline)
         });
         emit RemittanceTransferred(
@@ -144,6 +145,7 @@ contract Remittance is Ownable, Pausable {
         require(_remittance.amount != uint(0), "remittance already claimed");
         require(_remittance.sender == msg.sender, "sender mismatch");
         require(_remittance.recipient == _recipient, "recipient mismatch");
+        // solium-disable-next-line security/no-block-members
         require(block.timestamp > remittances[_remittanceId].deadline, "too early to reclaim");
         uint _amount = remittances[_remittanceId].amount;
         emit RemittanceReclaimed(_remittanceId, msg.sender, _amount);
